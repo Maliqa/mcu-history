@@ -12,6 +12,15 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
+
+st.set_page_config(
+    page_title="MCU CITSECH",
+    page_icon="🏥",
+    layout="centered"
+)
+
+os.makedirs("database/uploads", exist_ok=True)
+
 # =========================================
 # ==== AUTO INCLUDE CUSTOM CSS LEBAR BOX ===
 # =========================================
@@ -35,14 +44,6 @@ LOG_FILE = "database/app.log"
 os.makedirs("database", exist_ok=True)
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO,
                     format="%(asctime)s - %(levelname)s - %(message)s")
-
-st.set_page_config(
-    page_title="MCU CITSECH",
-    page_icon="🏥",
-    layout="centered"
-)
-
-os.makedirs("database/uploads", exist_ok=True)
 
 # ======== SETTING REPO GITHUB UNTUK LINK MCU PDF =========
 GITHUB_OWNER = "Maliqa"
