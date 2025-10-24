@@ -400,7 +400,7 @@ def send_reminder_email(to_email, employee_name, expired_date, mcu_year):
         msg['To'] = to_email
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'plain'))
-        server = smtplib.SMTP('mail.ptcai.com', 955)
+        server = smtplib.SMTP('server.modulindo.com', 587)
         server.starttls()
         server.login(from_email, from_pass)
         text = msg.as_string()
