@@ -12,7 +12,6 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-
 st.set_page_config(
     page_title="MCU CITSECH",
     page_icon="🏥",
@@ -81,11 +80,11 @@ def login_form():
         st.image(logo_path, width=280)
     else:
         st.markdown("<h3>MCU Dashboard</h3>", unsafe_allow_html=True)
-
     st.markdown("<h3 style='text-align:center;margin-top:0.25rem;'>Login MCU Dashboard</h3>", unsafe_allow_html=True)
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
     login_btn = st.button("Login")
+
     if login_btn:
         allowed = {"MAA":"MAA","SZA":"SZA","EWS":"EWS"}
         if username and username.upper() in allowed and password == allowed[username.upper()]:
@@ -97,13 +96,13 @@ def login_form():
             return
         else:
             st.error("Username or password salah!")
+
     # If user reaches here and not logged in, stop so the app doesn't render
     st.stop()
 
 # Initialize logged_in key if missing (prevents KeyError on refresh)
 if "logged_in" not in st.session_state:
     st.session_state["logged_in"] = False
-
 if not st.session_state.get("logged_in", False):
     login_form()
 
@@ -117,6 +116,7 @@ def init_db():
     try:
         conn = sqlite3.connect("database/mcu_database.db")
         cursor = conn.cursor()
+        # Tambahkan kolom employment_status
         cursor.execute('''
         CREATE TABLE IF NOT EXISTS employee (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -134,7 +134,8 @@ def init_db():
             recommendation TEXT,
             status TEXT,
             email TEXT,
-            reminder_sent INTEGER DEFAULT 0
+            reminder_sent INTEGER DEFAULT 0,
+            employment_status TEXT DEFAULT 'Kontrak' -- Kolom baru
         )
         ''')
         cursor.execute('''
@@ -172,16 +173,23 @@ def calculate_mcu_expiry(mcu_date):
     mcu_date = pd.to_datetime(mcu_date)
     return mcu_date + timedelta(days=365)
 
-def check_mcu_status(mcu_expired):
-    if pd.isna(mcu_expired):
-        return "No MCU"
-    mcu_expired = pd.to_datetime(mcu_expired)
-    if datetime.now() > mcu_expired:
-        return "Expired"
-    elif (mcu_expired - datetime.now()).days <= 30:
-        return "Will Expire"
-    else:
-        return "Active"
+# Fungsi baru untuk menentukan status MCU berdasarkan employment_status dan tanggal kadaluarsa
+def determine_mcu_status(employment_status, mcu_expired):
+    if employment_status == "Tetap":
+        # Jika tetap, gunakan logika status berdasarkan tanggal kadaluarsa
+        if pd.isna(mcu_expired):
+            return "No MCU"
+        mcu_expired = pd.to_datetime(mcu_expired)
+        if datetime.now() > mcu_expired:
+            return "Expired"
+        elif (mcu_expired - datetime.now()).days <= 30:
+            return "Will Expire"
+        else:
+            return "Active"
+    else: # Jika Kontrak, Freelance, dll
+        # Jika tidak tetap, status MCU adalah Free Employee
+        return "Free Employee"
+
 
 def save_uploaded_file(uploaded_file, nik, year):
     """
@@ -200,12 +208,10 @@ def save_uploaded_file(uploaded_file, nik, year):
         if data is None:
             st.error("Invalid file uploaded.")
             return None
-
         if len(data) > 100 * 1024 * 1024:
             st.error("❌ Max file size 100 MB!")
             logging.warning("File upload failed: file > 100MB")
             return None
-
         file_ext = os.path.splitext(uploaded_file.name)[1]
         if not file_ext:
             file_ext = ".pdf"
@@ -270,6 +276,7 @@ def edit_employee(nik, data):
     try:
         conn = sqlite3.connect("database/mcu_database.db")
         cursor = conn.cursor()
+        # Tambahkan kolom employment_status ke dalam query update
         cursor.execute('''
         UPDATE employee SET
             employee_name=?,
@@ -284,7 +291,8 @@ def edit_employee(nik, data):
             diagnosis=?,
             recommendation=?,
             status=?,
-            email=?
+            email=?,
+            employment_status=? -- Kolom baru
         WHERE nik=?
         ''', (
             data['employee_name'],
@@ -300,6 +308,7 @@ def edit_employee(nik, data):
             data['recommendation'],
             data['status'],
             data['email'],
+            data['employment_status'], # Kolom baru
             nik
         ))
         conn.commit()
@@ -321,7 +330,6 @@ def delete_employee(nik):
         cursor.execute("DELETE FROM mcu_history WHERE nik=?", (nik,))
         conn.commit()
         conn.close()
-
         # Delete files on disk (if any)
         file_dir = os.path.join("database", "uploads", "mcu_history", str(nik))
         if os.path.exists(file_dir):
@@ -335,7 +343,6 @@ def delete_employee(nik):
                 os.rmdir(file_dir)
             except Exception:
                 pass
-
         logging.info(f"Employee {nik} deleted from DB and disk")
         return True
     except Exception as e:
@@ -382,10 +389,8 @@ def send_reminder_email(to_email, employee_name, expired_date, mcu_year):
     subject = f"MCU Expired Reminder - {employee_name}"
     body = f"""
     Dear {employee_name},
-
     Your MCU (Medical Check Up) for year {mcu_year} will expire on {expired_date}.
     Please update your MCU soon.
-
     Regards,
     HSE CISTECH
     """
@@ -432,6 +437,7 @@ if page == "Dashboard MCU":
         st.error("Failed to load data!")
         logging.error(f"Dashboard error: {e}")
         df = pd.DataFrame()
+
     if not df.empty:
         st.header("Employee MCU Status")
         col1, col2, col3, col4 = st.columns(4)
@@ -439,10 +445,15 @@ if page == "Dashboard MCU":
         active_mcu = sum(df['status'] == "Active")
         expired_mcu = sum(df['status'] == "Expired")
         will_expired = sum(df['status'] == "Will Expire")
+        free_employee = sum(df['status'] == "Free Employee") # Hitung Free Employee
+
         col1.metric("Total Employee", total_emp)
         col2.metric("MCU Active", active_mcu)
         col3.metric("MCU Expired", expired_mcu)
         col4.metric("Will Expire", will_expired)
+        # Tambahkan metric Free Employee
+        st.metric("Free Employee", free_employee)
+
         st.header("Health Statistics (Pie Chart)")
         if 'diagnosis' in df.columns and not df['diagnosis'].isna().all():
             diagnosis_counts = df['diagnosis'].value_counts().head(5)
@@ -463,6 +474,7 @@ if page == "Dashboard MCU":
                 st.markdown(f"<b>{i}. {diagnosis}</b>: {jumlah} employee", unsafe_allow_html=True)
         else:
             st.warning("Diagnosis data not available.")
+
         st.header("MCU Reminder")
         try:
             conn = sqlite3.connect("database/mcu_database.db")
@@ -471,7 +483,9 @@ if page == "Dashboard MCU":
             st.error("Failed to load data for reminder!")
             logging.error(f"Reminder DB error: {e}")
             df_db = pd.DataFrame()
-        upcoming = df_db[df_db['status'] == "Will Expire"] if not df_db.empty and 'status' in df_db.columns else pd.DataFrame()
+
+        # Hanya cari karyawan yang statusnya "Will Expire" (bukan Free Employee)
+        upcoming = df_db[(df_db['status'] == "Will Expire") & (df_db['employment_status'] == "Tetap")] if not df_db.empty and 'status' in df_db.columns else pd.DataFrame()
         if not upcoming.empty:
             st.warning(f"⚠️ {len(upcoming)} employee MCU will expire soon!")
             for idx, row in upcoming.iterrows():
@@ -497,6 +511,7 @@ if page == "Dashboard MCU":
                         st.error(f"Failed to send email to {row['email']}")
         else:
             st.success("✅ No MCU will expire soon.")
+
     else:
         st.warning("Database is empty. Please input MCU data first.")
 
@@ -515,18 +530,24 @@ elif page == "Input MCU Data":
             with col2:
                 hire_date = st.date_input("Hire Date", min_value=datetime(1945, 1, 1), max_value=datetime(3000, 12, 31))
                 mcu_date = st.date_input("Last MCU Date", min_value=datetime(1945, 1, 1), max_value=datetime(3000, 12, 31))
+                # Tambahkan input untuk employment status
+                employment_status = st.selectbox("Employment Status", ["Kontrak", "Tetap"])
                 work_period = st.text_input("Work Period (auto)", value=calculate_work_period(hire_date), disabled=True)
-                mcu_expired = st.text_input("MCU Expired (auto)", value=calculate_mcu_expiry(mcu_date).strftime("%Y-%m-%d") if mcu_date else "", disabled=True)
+                # Status MCU tetap dihitung otomatis
+                mcu_status = st.text_input("MCU Status (auto)", value=determine_mcu_status(employment_status, calculate_mcu_expiry(mcu_date)), disabled=True)
+
             examination_result = st.text_area("Examination Result")
             diagnosis = st.text_input("Diagnosis")
             recommendation = st.text_area("Recommendation")
             file_mcu_main = st.file_uploader("Upload Main MCU Result (PDF/Image)", type=['pdf', 'png', 'jpg', 'jpeg'])
             submitted = st.form_submit_button("Save MCU Data")
+
             valid_date = True
             error_date = validate_dates(birth_date, hire_date, mcu_date)
             if error_date:
                 st.error(error_date)
                 valid_date = False
+
             if submitted and valid_date:
                 if not nik or not employee_name:
                     st.error("❌ NIK and Employee Name are required!")
@@ -539,13 +560,15 @@ elif page == "Input MCU Data":
                             st.error("❌ NIK already registered! Please use another NIK or edit existing data.")
                         else:
                             saved_filename = save_uploaded_file(file_mcu_main, nik, pd.to_datetime(mcu_date).year)
+                            # Gunakan fungsi baru untuk menentukan status
+                            calculated_status = determine_mcu_status(employment_status, calculate_mcu_expiry(mcu_date))
                             cursor.execute('''
                             INSERT INTO employee (
                                 nik, employee_name, birth_date, position,
                                 hire_date, work_period, mcu_date, mcu_expired,
                                 file_mcu_main, examination_result, diagnosis,
-                                recommendation, status, email, reminder_sent
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                recommendation, status, email, reminder_sent, employment_status -- Tambahkan employment_status
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             ''', (
                                 nik,
                                 employee_name,
@@ -559,9 +582,10 @@ elif page == "Input MCU Data":
                                 examination_result,
                                 diagnosis,
                                 recommendation,
-                                check_mcu_status(calculate_mcu_expiry(mcu_date)) if mcu_date else "No MCU",
+                                calculated_status, # Gunakan hasil dari fungsi baru
                                 email,
-                                0
+                                0,
+                                employment_status # Simpan employment_status
                             ))
                             conn.commit()
                             if saved_filename:
@@ -594,30 +618,28 @@ elif page == "MCU History":
         st.error("Failed to load data!")
         logging.error(f"History error: {e}")
         df = pd.DataFrame()
-    
+
     if not df.empty:
         search_col1, search_col2 = st.columns([3, 1])
         with search_col1:
             search_query = st.text_input("🔍 Search by NIK or Employee Name")
-        
         if search_query:
             filtered_data = df[
-                df['nik'].str.contains(search_query, case=False, na=False) | 
+                df['nik'].str.contains(search_query, case=False, na=False) |
                 df['employee_name'].str.contains(search_query, case=False, na=False)
             ]
         else:
             filtered_data = df
-        
+
         if not filtered_data.empty:
             selected_employee = st.selectbox(
                 "Choose Employee",
                 options=filtered_data['employee_name'] + " (" + filtered_data['nik'] + ")",
                 format_func=lambda x: x
             )
-            
             selected_nik = selected_employee.split("(")[1].replace(")", "")
             employee_data = filtered_data[filtered_data['nik'] == selected_nik].iloc[0]
-            
+
             st.subheader("Employee Information")
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -631,13 +653,15 @@ elif page == "MCU History":
             with col3:
                 st.write(f"**MCU Date:** {employee_data['mcu_date']}")
                 st.write(f"**MCU Expired:** {employee_data['mcu_expired']}")
+                # Tambahkan tampilan Employment Status
+                st.write(f"**Employment Status:** {employee_data['employment_status']}")
                 status = employee_data['status']
                 color = "green" if status == "Active" else "orange" if status == "Will Expire" else "red"
                 st.write(f"**Status:** <span style='color:{color};font-weight:bold'>{status}</span>", unsafe_allow_html=True)
-            
+
             st.subheader("Examination Result")
             st.write(employee_data['examination_result'])
-            
+
             st.subheader("Diagnosis & Recommendation")
             col1, col2 = st.columns(2)
             with col1:
@@ -646,10 +670,9 @@ elif page == "MCU History":
             with col2:
                 st.write(f"**Recommendation:**")
                 st.write(employee_data['recommendation'])
-            
+
             st.subheader("Employee MCU History (Expander per record)")
             history_df = get_mcu_history_db(employee_data['nik'])
-            
             if not history_df.empty:
                 # iterate and show each history item as an expander
                 for _, row in history_df.iterrows():
@@ -658,11 +681,9 @@ elif page == "MCU History":
                         st.write(f"Expired: {row['expired_date']}")
                         st.write(f"Diagnosis: {row['diagnosis']}")
                         st.write(f"Recommendation: {row['recommendation']}")
-                        
                         file_name = row['file_name']
                         file_path = get_file_path_mcu_history(employee_data['nik'], file_name)
                         github_url = get_github_mcu_url(employee_data['nik'], file_name)
-                        
                         # Action buttons in a row
                         c1, c2, c3 = st.columns([1,1,1])
                         with c1:
@@ -707,9 +728,10 @@ elif page == "MCU History":
                                 # no local file: open GitHub raw link in new tab via markdown link and show message
                                 st.markdown(f'<a href="{github_url}" target="_blank">📄 Open file on GitHub (raw)</a>', unsafe_allow_html=True)
                                 st.info("File tidak ditemukan di server; membuka di GitHub.")
+
             else:
                 st.info("Belum ada histori MCU.")
-            
+
             st.markdown("---")
             # Form untuk menambah MCU baru
             st.subheader("Tambah MCU Baru")
@@ -718,7 +740,7 @@ elif page == "MCU History":
             new_file = st.file_uploader("Upload File MCU", type=["pdf", "png", "jpg", "jpeg"], key=f"new_file_{selected_nik}_{new_year}")
             new_diag = st.text_input("Diagnosis MCU Baru")
             new_rekom = st.text_area("Recommendation MCU Baru")
-            
+
             if st.button("Save MCU Baru", key=f"btn_save_mcu_{selected_nik}_{new_year}"):
                 saved_file_name = save_uploaded_file(new_file, selected_nik, new_year)
                 if saved_file_name:
@@ -727,7 +749,7 @@ elif page == "MCU History":
                     safe_rerun()
                 else:
                     st.error("File MCU belum diupload.")
-            
+
             st.markdown("---")
             st.subheader("Edit/Delete Employee Data")
             edit_mode = st.checkbox("Edit employee data", key="edit_employee")
@@ -739,18 +761,29 @@ elif page == "MCU History":
                     email_edit = st.text_input("Employee Email", employee_data['email'])
                     hire_date_edit = st.date_input("Hire Date", pd.to_datetime(employee_data['hire_date']))
                     mcu_date_edit = st.date_input("Last MCU Date", pd.to_datetime(employee_data['mcu_date']))
+                    # Tambahkan input edit untuk employment_status
+                    employment_status_edit = st.selectbox("Employment Status", ["Kontrak", "Tetap"], index=0 if employee_data['employment_status'] == "Kontrak" else 1)
                     work_period_edit = calculate_work_period(hire_date_edit)
+                    # Hitung status baru berdasarkan employment_status_edit dan mcu_date_edit
                     mcu_expired_edit = calculate_mcu_expiry(mcu_date_edit).strftime("%Y-%m-%d")
+                    calculated_status_edit = determine_mcu_status(employment_status_edit, mcu_expired_edit)
+
                     examination_result_edit = st.text_area("Examination Result", employee_data['examination_result'])
                     diagnosis_edit = st.text_input("Diagnosis", employee_data['diagnosis'])
                     recommendation_edit = st.text_area("Recommendation", employee_data['recommendation'])
+
+                    # Status MCU dihitung otomatis, tampilkan sebagai disabled
+                    status_edit = st.text_input("MCU Status (auto)", value=calculated_status_edit, disabled=True)
+
                     file_mcu_main_edit = employee_data['file_mcu_main']
                     submitted_edit = st.form_submit_button("Save Changes")
+
                     if submitted_edit:
                         # If user wants to upload new main MCU file
                         new_file_mcu_main = st.file_uploader("Upload New Main MCU File", type=['pdf', 'png', 'jpg', 'jpeg'], key="edit_main_mcu_file")
                         if new_file_mcu_main is not None:
                             file_mcu_main_edit = save_uploaded_file(new_file_mcu_main, selected_nik, pd.to_datetime(mcu_date_edit).year)
+
                         edit_employee(selected_nik, {
                             "employee_name": employee_name_edit,
                             "birth_date": birth_date_edit.strftime("%Y-%m-%d"),
@@ -763,15 +796,18 @@ elif page == "MCU History":
                             "examination_result": examination_result_edit,
                             "diagnosis": diagnosis_edit,
                             "recommendation": recommendation_edit,
-                            "status": check_mcu_status(mcu_expired_edit),
-                            "email": email_edit
+                            "status": calculated_status_edit, # Gunakan status yang dihitung
+                            "email": email_edit,
+                            "employment_status": employment_status_edit # Simpan employment_status
                         })
                         st.success("Data berhasil diupdate!")
                         safe_rerun()
+
             # DELETE employee: two-step confirmation using session_state
             if st.button("🗑️ Delete Employee", key="delete_emp_btn"):
                 st.session_state["confirm_delete_emp"] = selected_nik
                 st.warning("Klik tombol Konfirmasi Penghapusan untuk menghapus employee ini secara permanen.")
+
             if st.session_state.get("confirm_delete_emp") == selected_nik:
                 if st.button("Konfirmasi Penghapusan (PERMANENT)", key="confirm_emp_delete_btn"):
                     ok = delete_employee(selected_nik)
@@ -790,20 +826,18 @@ elif page == "MCU History":
 elif page == "Export MCU Excel":
     show_logo()
     st.title("📤 Export MCU Data for Vendor")
-    
     try:
         conn = sqlite3.connect("database/mcu_database.db")
-        df_emp = pd.read_sql("SELECT nik, employee_name, position FROM employee", conn)
+        df_emp = pd.read_sql("SELECT nik, employee_name, position, employment_status FROM employee", conn) # Tambahkan employment_status
         conn.close()
     except Exception as e:
         st.error("Failed to load employee data!")
         logging.error(f"Export DB error: {e}")
         df_emp = pd.DataFrame()
-    
+
     # Tambahkan filter untuk memilih karyawan
     st.subheader("Filter Data untuk Export")
-    
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3) # Tambah kolom
     with col1:
         positions = []
         if not df_emp.empty:
@@ -812,49 +846,52 @@ elif page == "Export MCU Excel":
             "Pilih Department/Posisi",
             options=["All"] + positions
         )
-    
     with col2:
         # Filter berdasarkan status MCU
         conn = sqlite3.connect("database/mcu_database.db")
         df_status = pd.read_sql("SELECT nik, status FROM employee", conn)
         conn.close()
-        
         selected_status = st.selectbox(
             "Pilih Status MCU",
-            options=["All", "Active", "Will Expire", "Expired", "No MCU"]
+            options=["All", "Active", "Will Expire", "Expired", "No MCU", "Free Employee"] # Tambahkan Free Employee
         )
-    
+    with col3:
+        # Filter berdasarkan employment status
+        selected_emp_status = st.selectbox(
+            "Pilih Employment Status",
+            options=["All", "Kontrak", "Tetap"]
+        )
+
     # Apply filters
-    df_emp_filtered = df_emp.copy()
+    df_emp_filtered = df_emp.merge(df_status[['nik', 'status']], on='nik', how='left') # Gabungkan status
     if selected_department != "All":
         df_emp_filtered = df_emp_filtered[df_emp_filtered['position'] == selected_department]
-    
     if selected_status != "All":
-        df_emp_filtered = df_emp_filtered.merge(df_status, on='nik', how='left')
         df_emp_filtered = df_emp_filtered[df_emp_filtered['status'] == selected_status]
-    
+    if selected_emp_status != "All":
+        df_emp_filtered = df_emp_filtered[df_emp_filtered['employment_status'] == selected_emp_status] # Filter employment status
+
     st.info(f"Jumlah karyawan yang akan diexport: {len(df_emp_filtered)}")
-    
+
     # Pilihan format export
     export_format = st.radio(
         "Format Export",
         ["Excel dengan Link GitHub", "Excel dengan Info Lengkap"]
     )
-    
+
     export_btn = st.button("Export Data")
-    
+
     if export_btn and not df_emp_filtered.empty:
         export_rows = []
         meta_years = []
-        
         for idx, emp in df_emp_filtered.iterrows():
             nik = emp['nik']
             nama = emp['employee_name']
             position = emp.get('position', '')
-            
+            employment_status = emp.get('employment_status', '') # Ambil employment_status
             history_df = get_mcu_history_db(nik)
             last3 = history_df.head(3)
-            
+
             if export_format == "Excel dengan Link GitHub":
                 mcu_urls = []
                 mcu_years = []
@@ -862,15 +899,14 @@ elif page == "Export MCU Excel":
                     github_url = get_github_mcu_url(nik, row['file_name'])
                     mcu_urls.append(github_url)
                     mcu_years.append(str(row['mcu_year']) if pd.notna(row['mcu_year']) else "")
-                
                 while len(mcu_urls) < 3:
                     mcu_urls.append("")
                     mcu_years.append("")
-                
                 export_rows.append({
                     "NIK": nik,
                     "Employee Name": nama,
                     "Position": position,
+                    "Employment Status": employment_status, # Tambahkan kolom
                     "MCU 1": mcu_urls[0],
                     "MCU 2": mcu_urls[1],
                     "MCU 3": mcu_urls[2]
@@ -891,20 +927,20 @@ elif page == "Export MCU Excel":
                     "NIK": nik,
                     "Employee Name": nama,
                     "Position": position,
+                    "Employment Status": employment_status, # Tambahkan kolom
                     "MCU Terbaru": mcu_info[0],
                     "MCU Ke-2": mcu_info[1],
                     "MCU Ke-3": mcu_info[2]
                 })
-        
+
         df_export = pd.DataFrame(export_rows)
-        
+
         output = BytesIO()
         with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
             df_export.to_excel(writer, index=False, sheet_name='MCU Data')
-            
             workbook = writer.book
             worksheet = writer.sheets['MCU Data']
-            
+
             header_format = workbook.add_format({
                 'bold': True,
                 'text_wrap': True,
@@ -912,10 +948,10 @@ elif page == "Export MCU Excel":
                 'fg_color': '#D7E4BC',
                 'border': 1
             })
-            
+
             for col_num, value in enumerate(df_export.columns.values):
                 worksheet.write(0, col_num, value, header_format)
-            
+
             for i, col in enumerate(df_export.columns):
                 try:
                     max_len = max(
@@ -925,7 +961,7 @@ elif page == "Export MCU Excel":
                 except Exception:
                     max_len = len(col) + 2
                 worksheet.set_column(i, i, max_len)
-            
+
             if export_format == "Excel dengan Link GitHub":
                 for row_idx, row_dict in enumerate(export_rows, start=1):
                     years = meta_years[row_idx - 1] if (row_idx - 1) < len(meta_years) else ["", "", ""]
@@ -934,11 +970,12 @@ elif page == "Export MCU Excel":
                         display_year = years[col_offset] if years[col_offset] else ""
                         if isinstance(url, str) and url.startswith("http"):
                             display_text = f"MCU {display_year}" if display_year else "MCU"
-                            worksheet.write_url(row_idx, 3 + col_offset, url, string=display_text)
+                            worksheet.write_url(row_idx, 4 + col_offset, url, string=display_text) # Kolom MCU dimulai dari indeks 4
                         else:
                             pass
-        
+
         excel_data = output.getvalue()
+
         st.download_button(
             label="⬇️ Download Excel File",
             data=excel_data,
@@ -957,6 +994,7 @@ elif page == "Health Monitoring":
         st.error("Failed to load data!")
         logging.error(f"Monitoring error: {e}")
         df = pd.DataFrame()
+
     if not df.empty and 'diagnosis' in df.columns:
         st.header("Health Trend Chart")
         st.subheader("Employee Age Histogram")
@@ -996,6 +1034,7 @@ elif page == "Health Monitoring":
             ax3.set_ylabel('MCU Count')
             ax3.grid(True)
             ax3.tick_params(axis='x', rotation=45)
+
             monthly_counts.plot(kind='pie', ax=ax4, autopct='%1.1f%%',
                               startangle=90, shadow=True,
                               colors=plt.cm.Paired.colors)
@@ -1004,19 +1043,22 @@ elif page == "Health Monitoring":
             st.pyplot(fig3)
 
         st.header("Health Risk Notification")
-        common_issues = df['diagnosis'].value_counts().head(3)
+        # Filter hanya karyawan tetap untuk peringatan kesehatan
+        df_active = df[df['employment_status'] == 'Tetap']
+        common_issues = df_active['diagnosis'].value_counts().head(3)
         if not common_issues.empty:
-            st.warning("**⚠️ Warning:** Some common health issues detected:")
+            st.warning("**⚠️ Warning:** Some common health issues detected (Permanent Employees Only):")
             for issue, count in common_issues.items():
                 st.write(f"- **{issue}**: {count} employee")
             expander = st.expander("📋 See Employee Details")
             for issue in common_issues.index:
-                affected = df[df['diagnosis'] == issue]
+                affected = df_active[df_active['diagnosis'] == issue]
                 for idx, row in affected.iterrows():
                     expander.markdown(
-                        f"<b>{row['employee_name']} ({row['nik']})</b> | Position: {row.get('position','-')}", unsafe_allow_html=True
+                        f"<b>{row['employee_name']} ({row['nik']})</b> | Position: {row.get('position','-')} | Status: {row.get('employment_status', '-')}", unsafe_allow_html=True
                     )
         else:
-            st.success("✅ No common health issues detected.")
+            st.success("✅ No common health issues detected among permanent employees.")
+
     else:
         st.warning("Diagnosis data not available for monitoring.")
