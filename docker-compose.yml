@@ -1,0 +1,12 @@
+version: '3.8' # Versi format docker-compose
+
+services:
+  mcu-dashboard: # Nama service
+    build: . # Build image dari Dockerfile di folder saat ini (.)
+    ports:
+      - "8511:8511" # Mapping port host:container (8511 ke 8511)
+    volumes:
+      # Mount folder database lokal ke folder database di dalam container
+      # Ganti './mcu_data' dengan nama folder lokal tempat nyimpen data persisten
+      # Kita buat folder ini di langkah berikutnya
+      - ./mcu_data:/app/database
