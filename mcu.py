@@ -707,7 +707,7 @@ elif page == "MCU History":
             def color_status(val):
                 color = "green" if val == "Active" else "orange" if val == "Will Expire" else "red" if val in ["Expired", "No MCU"] else "blue" # Warna untuk Pre Employee dan Berkala
                 return f'color: {color}; font-weight: bold'
-            st.dataframe(display_df.style.applymap(color_status, subset=['status']))
+            st.dataframe(display_df.style.map(color_status, subset=['status']))
         else:
             st.warning("Tidak ada karyawan dengan status tersebut.")
 
